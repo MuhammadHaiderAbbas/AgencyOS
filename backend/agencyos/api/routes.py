@@ -88,7 +88,11 @@ async def logout(request: Request):
 async def me(request, user):
     org = db().q1("SELECT * FROM organizations WHERE id = ?", (user["org_id"],))
     unread = db().q1("SELECT COUNT(*) n FROM notifications WHERE user_id = ? AND read = 0", (user["id"],))["n"]
-    return ok({"user": user, "organization": org, "unread_notifications": unread, "llm": provider_status(user["org_id"])})
+    resp = ok({"user": user, "organization": org, "unread_notifications": unread, "llm": provider_status(user["org_id"])})
+    # refresh the HttpOnly cookie used by previews, downloads and the event stream
+    token = request.headers.get("authorization", "")[7:]
+    resp.set_cookie(COOKIE, token, httponly=True, samesite="lax", max_age=settings().access_token_ttl_minutes * 60, path="/")
+    return resp
 
 
 @auth()

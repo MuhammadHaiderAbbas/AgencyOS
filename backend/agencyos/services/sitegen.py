@@ -38,7 +38,7 @@ header.site .wrap{{display:flex;align-items:center;justify-content:space-between
 nav.main ul{{list-style:none;display:flex;gap:22px;margin:0;padding:0;align-items:center}}
 nav.main a{{text-decoration:none;color:var(--muted);font-weight:500;padding:10px 2px;display:inline-block}}
 nav.main a[aria-current=page],nav.main a:hover{{color:var(--text)}}
-nav.main a.nav-cta{{padding:0 18px;color:var(--on-primary);min-height:42px}}
+nav.main a.nav-cta{{display:inline-flex;padding:0 18px;color:var(--on-primary);min-height:42px}}
 .menu-btn{{display:none;background:none;border:1px solid var(--border);color:var(--text);border-radius:8px;min-height:44px;min-width:44px}}
 .btn{{display:inline-flex;align-items:center;justify-content:center;min-height:46px;padding:0 22px;border-radius:var(--radius);
 background:var(--primary);color:var(--on-primary);text-decoration:none;font-weight:600;border:0;cursor:pointer;font-size:1rem}}

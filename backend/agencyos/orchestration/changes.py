@@ -23,7 +23,7 @@ BACKEND_FEATURES = {"booking", "payments", "accounts", "admin_dashboard", "newsl
 
 
 # Upstream producers are only re-run when the change targets them directly.
-NO_CASCADE = {"research", "architecture", "ui_design_system", "ba_requirements", "ux_structure"}
+NO_CASCADE = {"research", "architecture", "ui_design_system", "ba_requirements", "ux_structure", "db_schema", "backend"}
 
 
 def impacted(project_id: str, keys: list[str], tasks: dict[str, dict]) -> set[str]:

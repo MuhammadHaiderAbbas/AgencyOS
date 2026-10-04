@@ -124,6 +124,8 @@ def project_public(p: dict) -> dict:
     out["last_activity_message"] = last["message"] if last else None
     dep = db().q1("SELECT url FROM deployments WHERE project_id = ? AND status = 'SUCCEEDED' ORDER BY created_at DESC LIMIT 1", (p["id"],))
     out["live_url"] = dep["url"] if dep else None
+    from ..services import workspace
+    out["has_preview"] = (workspace.path_for(p["id"]) / "source" / "site" / "index.html").exists()
     return out
 
 

@@ -94,6 +94,41 @@ async def ws_notifications(websocket: WebSocket):
     await _ws(websocket, None, ("NOTIFICATION", "APPROVAL_REQUIRED"))
 
 
+# ---------------------------------------------------------------- server-sent events (works without a WS library)
+async def _sse(request: Request, project_id: str | None):
+    import json as _json
+    from sse_starlette.sse import EventSourceResponse
+    from .common import current_user, project_for
+    user = current_user(request, allow_cookie=True)
+    if project_id:
+        project_for(user, project_id)
+    q = bus.subscribe(asyncio.get_running_loop(), org_id=user["org_id"], project_id=project_id)
+
+    async def gen():
+        try:
+            yield {"event": "ready", "data": "{}"}
+            while True:
+                if await request.is_disconnected():
+                    break
+                try:
+                    evt = await asyncio.wait_for(q.get(), timeout=15)
+                except asyncio.TimeoutError:
+                    continue
+                yield {"event": "message", "data": _json.dumps(evt)}
+        finally:
+            bus.unsubscribe(q)
+
+    return EventSourceResponse(gen(), ping=15, headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
+
+
+async def sse_org(request: Request):
+    return await _sse(request, None)
+
+
+async def sse_project(request: Request):
+    return await _sse(request, request.path_params["pid"])
+
+
 # ---------------------------------------------------------------- lifecycle
 def recover() -> None:
     """After a restart: tasks that were mid-flight are re-queued (never silently lost)."""
@@ -129,7 +164,8 @@ def create_app(**overrides) -> Starlette:
         return RedirectResponse(f"/sites/{request.path_params['pid']}/")
 
     app = Starlette(
-        routes=[*routes, Route("/sites/{pid}", site_root),
+        routes=[Route("/api/stream/org", sse_org), Route("/api/stream/projects/{pid}", sse_project),
+                *routes, Route("/sites/{pid}", site_root),
                 WebSocketRoute("/ws/projects/{pid}", ws_project), WebSocketRoute("/ws/org", ws_org),
                 WebSocketRoute("/ws/tasks", ws_tasks), WebSocketRoute("/ws/agents", ws_agents),
                 WebSocketRoute("/ws/notifications", ws_notifications), *extra],
