@@ -1,0 +1,47 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: jarvis
+      POSTGRES_PASSWORD: jarvis
+      POSTGRES_DB: jarvis
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U jarvis"]
+      interval: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      retries: 10
+
+  gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      JARVIS_DATABASE_URL: postgresql+psycopg://jarvis:jarvis@postgres:5432/jarvis
+      JARVIS_REDIS_URL: redis://redis:6379/0
+      JARVIS_SECRET_KEY: change-me-in-prod-to-64-random
+      JARVIS_ENV: production
+    volumes:
+      - jarvis_data:/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+volumes:
+  pgdata:
+  jarvis_data:

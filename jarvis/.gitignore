@@ -1,0 +1,13 @@
+# JARVIS — local
+data/
+apps/web/dist/
+apps/web/node_modules/
+*.sqlite3
+*.log
+.secret_key
+.env
+__pycache__/
+.venv/
+.pytest_cache/
+dist/
+.DS_Store
