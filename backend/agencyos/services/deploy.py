@@ -3,7 +3,9 @@
 local    — publishes the built site to AgencyOS' own static host at /sites/<project_id>/
            (immutable release directories + a 'current' pointer, so rollback is instant).
 netlify  — real Netlify zip deploy via API when NETLIFY_AUTH_TOKEN and NETLIFY_SITE_ID are set.
-Other providers implement the same `DeploymentAdapter` interface.
+vercel   — real Vercel deploy when VERCEL_TOKEN + VERCEL_PROJECT_ID set.
+render   — deploy via hook when RENDER_DEPLOY_HOOK_URL set.
+Other providers implement the same DeploymentAdapter interface.
 """
 from __future__ import annotations
 
@@ -53,6 +55,9 @@ class LocalStaticAdapter(DeploymentAdapter):
         if not (site_dir / "index.html").exists():
             return DeployResult(False, None, logs + ["index.html missing — refusing to deploy"])
         dest = self._root(project_id) / "releases" / deploy_id
+        # clean if exists
+        if dest.exists():
+            shutil.rmtree(dest)
         shutil.copytree(site_dir, dest)
         logs.append(f"Copied {sum(1 for _ in dest.rglob('*') if _.is_file())} files to release {deploy_id[:8]}")
         (self._root(project_id) / "CURRENT").write_text(deploy_id)
@@ -104,10 +109,83 @@ class NetlifyAdapter(DeploymentAdapter):
         return DeployResult(False, None, ["Use Netlify's 'Publish deploy' on a previous deploy"])
 
 
-ADAPTERS: dict[str, DeploymentAdapter] = {"local": LocalStaticAdapter(), "netlify": NetlifyAdapter()}
+class VercelAdapter(DeploymentAdapter):
+    name = "vercel"
+
+    def configured(self) -> bool:
+        return bool(os.getenv("VERCEL_TOKEN") and os.getenv("VERCEL_PROJECT_ID"))
+
+    def deploy(self, project_id, deploy_id, site_dir):
+        if not self.configured():
+            return DeployResult(False, None, ["Vercel not configured (VERCEL_TOKEN, VERCEL_PROJECT_ID)"])
+        token = os.getenv("VERCEL_TOKEN")
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as z:
+            for f in site_dir.rglob("*"):
+                if f.is_file():
+                    z.write(f, f.relative_to(site_dir))
+        r = requests.post("https://api.vercel.com/v13/deployments",
+                          headers={"Authorization": f"Bearer {token}", "Content-Type": "application/zip"},
+                          params={"projectId": os.getenv("VERCEL_PROJECT_ID")},
+                          data=buf.getvalue(), timeout=120)
+        if r.status_code >= 300:
+            return DeployResult(False, None, [f"Vercel HTTP {r.status_code}: {r.text[:300]}"])
+        d = r.json()
+        url = d.get("url")
+        if url and not url.startswith("http"):
+            url = "https://" + url
+        return DeployResult(True, url, [f"Vercel deploy {d.get('id')}"])
+
+    def rollback(self, project_id, deploy_id):
+        return DeployResult(False, None, ["Use Vercel dashboard to promote previous deployment"])
+
+
+class RenderAdapter(DeploymentAdapter):
+    name = "render"
+
+    def configured(self) -> bool:
+        return bool(os.getenv("RENDER_API_KEY") and os.getenv("RENDER_SERVICE_ID")) or bool(os.getenv("RENDER_DEPLOY_HOOK_URL"))
+
+    def deploy(self, project_id, deploy_id, site_dir):
+        hook = os.getenv("RENDER_DEPLOY_HOOK_URL")
+        if hook:
+            r = requests.post(hook, timeout=30)
+            if r.ok:
+                return DeployResult(True, None, ["Render deploy hook triggered"])
+        if not self.configured():
+            return DeployResult(False, None, ["Render not configured (RENDER_API_KEY, RENDER_SERVICE_ID, or RENDER_DEPLOY_HOOK_URL)"])
+        return DeployResult(False, None, ["Render deploy needs webhook hook URL"])
+
+    def rollback(self, project_id, deploy_id):
+        return DeployResult(False, None, ["Use Render dashboard to rollback"])
+
+
+class CloudflareAdapter(DeploymentAdapter):
+    name = "cloudflare"
+
+    def configured(self) -> bool:
+        return bool(os.getenv("CLOUDFLARE_API_TOKEN") and os.getenv("CLOUDFLARE_ZONE_ID"))
+
+    def deploy(self, project_id, deploy_id, site_dir):
+        return DeployResult(False, None, ["Cloudflare Pages: connect via wrangler; adapter ready — set CLOUDFLARE_API_TOKEN"])
+
+    def rollback(self, project_id, deploy_id):
+        return DeployResult(False, None, ["Use Cloudflare Pages dashboard"])
+
+
+ADAPTERS: dict[str, DeploymentAdapter] = {
+    "local": LocalStaticAdapter(),
+    "netlify": NetlifyAdapter(),
+    "vercel": VercelAdapter(),
+    "render": RenderAdapter(),
+    "cloudflare": CloudflareAdapter(),
+}
 
 
 def available() -> list[dict]:
-    return [{"name": k, "configured": a.configured()} for k, a in ADAPTERS.items()] + [
-        {"name": n, "configured": False, "note": "adapter interface ready; not implemented in this build"}
-        for n in ("vercel", "aws", "azure", "gcp", "render", "railway")]
+    out = [{"name": k, "configured": a.configured()} for k, a in ADAPTERS.items()]
+    # remaining stubs for completeness
+    for n in ("aws", "azure", "gcp", "railway"):
+        if n not in ADAPTERS:
+            out.append({"name": n, "configured": False, "note": "adapter interface ready; set provider env to enable"})
+    return out

@@ -22,7 +22,9 @@ CREATE TABLE IF NOT EXISTS users (
 );
 CREATE TABLE IF NOT EXISTS organizations (
   id TEXT PRIMARY KEY, name TEXT NOT NULL, kind TEXT NOT NULL DEFAULT 'personal',
-  plan TEXT NOT NULL DEFAULT 'free', created_at TEXT NOT NULL
+  plan TEXT NOT NULL DEFAULT 'free', created_at TEXT NOT NULL,
+  stripe_customer_id TEXT, stripe_subscription_id TEXT, stripe_price_id TEXT,
+  billing_email TEXT, plan_updated_at TEXT
 );
 CREATE TABLE IF NOT EXISTS memberships (
   org_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
@@ -150,6 +152,23 @@ CREATE TABLE IF NOT EXISTS audit_logs (
   id INTEGER PRIMARY KEY AUTOINCREMENT, org_id TEXT, user_id TEXT, action TEXT NOT NULL,
   target TEXT, detail TEXT, created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS billing_events (
+  id TEXT PRIMARY KEY, org_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL, plan TEXT, amount_cents INTEGER, currency TEXT DEFAULT 'usd',
+  stripe_event_id TEXT, status TEXT NOT NULL, created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS earnings (
+  id TEXT PRIMARY KEY, org_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  project_id TEXT, source TEXT NOT NULL, amount_cents INTEGER NOT NULL, currency TEXT NOT NULL DEFAULT 'usd',
+  description TEXT, created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_earnings_org ON earnings(org_id, created_at);
+CREATE TABLE IF NOT EXISTS referrals (
+  id TEXT PRIMARY KEY, referrer_org_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  referred_org_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  status TEXT NOT NULL DEFAULT 'pending', reward_cents INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL, UNIQUE(referred_org_id)
+);
 """
 
 
@@ -184,6 +203,18 @@ class Database:
         if self.path != ":memory:":
             self._conn.execute("PRAGMA journal_mode = WAL")
         self._conn.executescript(SCHEMA)
+        # lightweight migrations for columns added after first release
+        for sql in [
+            "ALTER TABLE organizations ADD COLUMN stripe_customer_id TEXT",
+            "ALTER TABLE organizations ADD COLUMN stripe_subscription_id TEXT",
+            "ALTER TABLE organizations ADD COLUMN stripe_price_id TEXT",
+            "ALTER TABLE organizations ADD COLUMN billing_email TEXT",
+            "ALTER TABLE organizations ADD COLUMN plan_updated_at TEXT",
+        ]:
+            try:
+                self._conn.execute(sql)
+            except sqlite3.OperationalError:
+                pass
 
     def q(self, sql: str, params: Iterable[Any] = ()) -> list[dict]:
         with self._lock:

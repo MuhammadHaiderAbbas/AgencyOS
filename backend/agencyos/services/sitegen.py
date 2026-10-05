@@ -82,7 +82,43 @@ JS = r"""(function(){
   var btn=document.querySelector('.menu-btn'),nav=document.querySelector('nav.main');
   if(btn&&nav){btn.addEventListener('click',function(){var o=nav.classList.toggle('open');btn.setAttribute('aria-expanded',o?'true':'false');});}
   var API=(window.SITE_CONFIG&&window.SITE_CONFIG.apiBase)||'';
-  function show(el,msg){el.textContent=msg;el.hidden=false;el.focus&&el.focus();}
+  var PK=(window.SITE_CONFIG&&window.SITE_CONFIG.stripePublishableKey)||'';
+  function show(el,msg,ok){el.textContent=msg;el.hidden=false;el.style.borderLeftColor=ok?'#22c55e':'#ef4444';el.focus&&el.focus();}
+  // lightweight cart for ecommerce
+  var cart=JSON.parse(localStorage.getItem('site_cart')||'[]');
+  function saveCart(){localStorage.setItem('site_cart',JSON.stringify(cart));renderCart();}
+  function renderCart(){
+    document.querySelectorAll('[data-cart-count]').forEach(function(el){el.textContent=cart.length;});
+    var list=document.querySelector('[data-cart-items]');
+    if(list){list.innerHTML=cart.map(function(i,idx){return '<div class="row between"><span>'+i.name+'</span><span>£'+(i.price/100).toFixed(2)+' <button data-remove="'+idx+'" style="margin-left:8px">×</button></span></div>';}).join('')||'<p class="muted">Your cart is empty.</p>';}
+    var total=document.querySelector('[data-cart-total]');
+    if(total){var s=cart.reduce(function(a,c){return a+c.price;},0); total.textContent='£'+(s/100).toFixed(2);}
+  }
+  document.addEventListener('click',function(e){
+    var a=e.target.closest('[data-add-to-cart]');
+    if(a){
+      e.preventDefault();
+      cart.push({id:a.getAttribute('data-add-to-cart'),name:a.getAttribute('data-name')||a.textContent.trim(),price:parseInt(a.getAttribute('data-price')||'0',10)});
+      saveCart(); var n=document.querySelector('[data-cart-count]'); if(n){n.textContent=cart.length;}
+      show(document.querySelector('.notice')||{hidden:false,textContent:''},'Added to cart — view cart to checkout.',true);
+    }
+    var rm=e.target.closest('[data-remove]');
+    if(rm){cart.splice(parseInt(rm.getAttribute('data-remove'),10),1); saveCart();}
+    var checkout=e.target.closest('[data-checkout]');
+    if(checkout){
+      e.preventDefault();
+      if(!cart.length) return;
+      if(!API){return alert('Connect the API to enable real checkout. Cart: '+JSON.stringify(cart));}
+      checkout.disabled=true; checkout.textContent='Redirecting…';
+      fetch(API+'/api/orders/checkout',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({items:cart})})
+        .then(function(r){return r.json().then(function(j){return {ok:r.ok,j:j};});})
+        .then(function(res){
+          if(res.ok && res.j.url){localStorage.removeItem('site_cart'); location.href=res.j.url;}
+          else {alert(res.j.error||'Checkout failed'); checkout.disabled=false; checkout.textContent='Checkout';}
+        }).catch(function(){alert('Checkout unavailable'); checkout.disabled=false; checkout.textContent='Checkout';});
+    }
+  });
+  renderCart();
   document.querySelectorAll('form[data-endpoint]').forEach(function(f){
     f.addEventListener('submit',function(ev){
       ev.preventDefault();
@@ -94,14 +130,33 @@ JS = r"""(function(){
         if(data.check_in<today){return show(out,'Check-in cannot be in the past.');}
         if(data.check_out<=data.check_in){return show(out,'Check-out must be after check-in.');}
       }
-      if(!API){return show(out,'This preview is not connected to the live API yet, so nothing was sent. Your details were valid.');}
+      // if booking with payments, redirect to Stripe if provided
+      var wantsPay = f.getAttribute('data-endpoint')==='/api/bookings' && f.querySelector('[name=\"room\"]') && PK;
+      if(!API){return show(out,'This preview is not connected to the live API yet, so nothing was sent. Your details were valid.',true);}
+      var btn=f.querySelector('button[type=\"submit\"]'); var old=btn?btn.textContent:''; if(btn){btn.disabled=true; btn.textContent='Please wait…';}
       fetch(API+f.getAttribute('data-endpoint'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)})
-        .then(function(r){return r.json().then(function(j){return {ok:r.ok,j:j};});})
-        .then(function(res){show(out,res.ok?(res.j.message||'Thank you — we have received your request.'):(res.j.error||'Something went wrong.'));if(res.ok)f.reset();})
-        .catch(function(){show(out,'We could not reach the server. Please try again or contact us directly.');});
+        .then(function(r){return r.json().then(function(j){return {ok:r.ok,code:r.status,j:j};});})
+        .then(function(res){
+          if(res.ok){
+            if(res.j.checkout_url){
+              // Stripe checkout for payments-enabled booking
+              location.href=res.j.checkout_url;
+              return;
+            }
+            show(out,res.j.message||'Thank you — we have received your request.',true);f.reset();
+            if(window.plausible) plausible(f.getAttribute('data-endpoint'));
+          } else {
+            show(out,res.j.error||'Something went wrong.');
+          }
+        })
+        .catch(function(){show(out,'We could not reach the server. Please try again or contact us directly.');})
+        .finally(function(){if(btn){btn.disabled=false; btn.textContent=old;}});
     });
   });
   var y=document.getElementById('year'); if(y) y.textContent=new Date().getFullYear();
+  // analytics: respect SITE_CONFIG.plausible
+  var pl=(window.SITE_CONFIG&&window.SITE_CONFIG.plausibleDomain)||'';
+  if(pl){var s=document.createElement('script');s.defer=true;s.dataset.domain=pl; s.src='https://plausible.io/js/script.js';document.head.appendChild(s);}
 })();
 """
 

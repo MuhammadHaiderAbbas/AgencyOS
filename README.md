@@ -35,8 +35,11 @@ All of the following runs; none of it is mocked in the UI.
 | Custom prompt agents (admin): create, test, enable | ✅ |
 | Realtime UI (Server-Sent Events; WebSocket endpoints too), dashboard, chat, kanban, trace, admin observability | ✅ |
 | Export ZIP, clone, archive, delete (confirmed), data export, account deletion | ✅ |
-| Billing | Plans and usage metering only. No payment provider is wired, and the UI says so |
-| GitHub push / PRs, email notifications, Vercel/AWS/etc. deploy | Interfaces only (marked "not configured" in UI) |
+| Billing & earning | **Stripe live + demo mock** — free/pro/business/enterprise, Checkout, customer portal, webhook, referral £5/£15, earnings history; limits enforced 402; mock instant upgrade so **whole site earns demo without keys** |
+| GitHub push | ✅ PAT push via `GITHUB_TOKEN` (local git always; `POST /api/projects/{id}/push` when configured) |
+| Email notifications | ✅ SMTP (`SMTP_HOST`…) — real booking/enquiry emails when set, mock log + in-app otherwise (never blocks earning) |
+| Deploy | ✅ Local immutable + health + rollback (always) + **Netlify, Vercel, Render, Cloudflare** real when tokens set; AWS/Azure/GCP/Railway stubs same interface |
+| Client site monetization | ✅ Static site → Stripe Checkout (real with `STRIPE_SECRET_KEY` else mock), cart, newsletter, SEO, Plausible, `source/api/EARNING.md` |
 
 **Without an API key** the platform runs in **local deterministic mode**. Every agent uses its rule-based implementation, so the whole pipeline produces a real, tested website with no LLM. The UI labels these runs "local" and reports $0 AI cost. **With a key**, agents use the model for language work (user stories, copy, extraction, reviews). JSON outputs are schema-validated and retried, with the deterministic implementation as a safe fallback.
 
@@ -65,6 +68,29 @@ export ANTHROPIC_API_KEY=...          # or OPENAI_API_KEY, or set keys per works
 ```
 
 Docker: `docker build -t agencyos . && docker run -p 8000:8000 -v agencyos-data:/data agencyos`
+
+## 💰 Earning — entire platform is now monetization-ready
+
+> **Demo earning works with zero keys** — checkout instantly upgrades (mock), client site checkout returns mock URLs — the whole flow is always testable end-to-end. Add Stripe keys to charge real money with no code change.
+
+| How | What | Config |
+|-----|------|--------|
+| **Platform subscriptions** | Free 3 projects → Pro £29 (20 proj, 10k runs) → Business £99 (100 proj, 50k runs) → Enterprise custom. Limits enforced `402` on `/api/projects`. Billing history + earnings in UI. | `STRIPE_SECRET_KEY`, `STRIPE_PUBLISHABLE_KEY`, `STRIPE_PRICE_PRO`, `STRIPE_PRICE_BUSINESS`, `STRIPE_WEBHOOK_SECRET` + `AGENCYOS_BASE_URL` |
+| **Client site bookings/orders** | Every hotel/ecommerce site your agents build includes Stripe Checkout: `POST /api/bookings` → returns `{checkout_url}` (real Stripe when `STRIPE_SECRET_KEY` set in `source/api/.env`, mock otherwise), cart `POST /api/orders/checkout`, nightly rates per room. Docs in `source/api/EARNING.md`. | Generated `source/api/.env.example` already has keys; set them when you deploy `source/api` (e.g. Render, Fly, VPS) |
+| **Newsletter & enquiries** | `POST /api/newsletter` builds owned list; `POST /api/enquiries` + `POST /api/bookings` send email notification via SMTP when set, mock log otherwise. | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `SMTP_FROM` |
+| **Referrals** | Share `?ref=<your_org[:8]>` — when referred org upgrades, you get £5 (Pro) / £15 (Business) credited to `earnings` automatically. Link & stats in Billing. | No config — auto from signup `?ref=` or localStorage |
+| **Deploy & deliver** | Finish project → Deliverables → Deploy (local always + Netlify/Vercel/Render/Cloudflare when tokens set) → hand client Live URL + `ADMIN_TOKEN` | `NETLIFY_AUTH_TOKEN`, `VERCEL_TOKEN`, `RENDER_DEPLOY_HOOK_URL`, `GITHUB_TOKEN` for push |
+
+Test earning now:
+
+\`\`\`bash
+# platform (mock, no keys needed)
+curl -X POST http://localhost:8000/api/billing/checkout -H "Authorization: Bearer <token>" -d '{"plan":"pro"}' # → mock url + instant upgrade
+# client site (after `python -m agencyos seed-demo` + export)
+curl -X POST http://localhost:8080/api/bookings -d '{"room":"deluxe-king","check_in":"2030-02-01","check_out":"2030-02-03","adults":2,"name":"Guest","email":"g@example.com"}' # → {checkout_url}
+\`\`\`
+
+See `.env.example` for all keys; add them to server env or `Settings → Integrations` (encrypted). **No rebuild needed** — restart and the badges flip from "demo earning" to "live".
 
 ## Tests
 

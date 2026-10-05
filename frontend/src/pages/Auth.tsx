@@ -10,12 +10,23 @@ export function AuthPage({ onAuthed }: { onAuthed: () => void }) {
     e.preventDefault();
     setBusy(true); setErr(null);
     try {
-      const body = mode === "signup" ? form : { email: form.email, password: form.password };
-      const r = await api<{ token: string }>(`/api/auth/${mode}`, { method: "POST", body });
+      const params = new URLSearchParams(location.hash.split("?")[1]||"");
+      const ref = params.get("ref") || (()=>{ try{ return localStorage.getItem("agencyos_ref")||"" }catch{ return "" } })();
+      const body = mode === "signup" ? { ...form, referral_code: ref||undefined } : { email: form.email, password: form.password };
+      // persist ref for future signup if user switches mode
+      if(ref) try{ localStorage.setItem("agencyos_ref", ref);}catch{}
+      const q = ref && mode==="signup" ? `?ref=${encodeURIComponent(ref)}` : "";
+      const r = await api<{ token: string }>(`/api/auth/${mode}${q}`, { method: "POST", body });
       setToken(r.token);
       onAuthed();
     } catch (e: any) { setErr(e.message); } finally { setBusy(false); }
   };
+  // capture ?ref= on mount for earning
+  try{
+    const qp = new URLSearchParams(location.search+"#"+location.hash);
+    const r = qp.get("ref");
+    if(r) localStorage.setItem("agencyos_ref", r.slice(0,8));
+  }catch{}
   return <div className="auth-wrap">
     <div style={{ display: "grid", gap: 26, justifyItems: "center", width: "100%" }}>
       <div style={{ textAlign: "center", maxWidth: 640 }}>

@@ -333,21 +333,50 @@ function DeliverablesTab({ p, tick, onChange }: { p: any; tick: number; onChange
   const { data, reload } = useApi<any>(`/api/projects/${p.id}/deployments`, [tick]);
   const toast = useToast();
   const rollback = async (id: string) => { try { await api(`/api/projects/${p.id}/deployments/${id}/rollback`, { method: "POST" }); toast("Rolled back"); reload(); onChange(); } catch (e: any) { toast(e.message, true); } };
+  const earningReady = p.has_preview;
   return <div className="stack">
-    <div className="card pad stack">
-      <div className="row between wrap"><h3>{p.status === "COMPLETED" ? "PROJECT COMPLETE" : "Deliverables so far"}</h3><Status s={p.status} /></div>
+    <div className="card pad stack" style={{ borderColor: p.status==="COMPLETED"?"#22c55e66":undefined, background: p.status==="COMPLETED"?"rgba(34,197,94,.06)":undefined }}>
+      <div className="row between wrap"><h3>{p.status === "COMPLETED" ? "PROJECT COMPLETE — ready to earn" : "Deliverables so far"}</h3><Status s={p.status} /></div>
+      {p.status==="COMPLETED" && <div className="small" style={{ background:"linear-gradient(135deg, #6d5efc11, #22d3ee11)", padding:8, borderRadius:8, border:"1px solid #6d5efc33" }}><b>💰 Earning activated:</b> This site ships with Stripe Checkout (real when you set <code>STRIPE_SECRET_KEY</code> in <code>source/api/.env</code>, mock checkout works without it), newsletter capture that builds your owned list, and SEO that drives traffic. Deploy, set your Stripe keys & email, and hand the live URL + API to your client — they pay you.</div>}
       <div className="row wrap">
         {p.live_url && <a className="btn success" href={p.live_url} target="_blank" rel="noopener"><LuRocket /> Live URL</a>}
         <a className="btn" href={`/api/projects/${p.id}/export`}><LuDownload /> Download source & docs (ZIP)</a>
         <a className="btn" href={`#/projects/${p.id}/files`}>Source code</a><a className="btn" href={`#/projects/${p.id}/artifacts`}>Reports & documentation</a>
+        {earningReady && <a className="btn primary" href={`/api/projects/${p.id}/preview/booking.html`} target="_blank" rel="noopener">Test booking checkout →</a>}
       </div>
-      <div className="small muted">GitHub repository: not connected (the project has its own local git history; connect GitHub in Settings to push it). Secrets are never included in exports.</div>
+      <div className="small muted">GitHub: not connected (local git history kept; connect in Settings → paste <code>GITHUB_TOKEN</code> to push). Secrets never leave the server or exports.</div>
     </div>
+
+    {earningReady && <div className="grid" style={{ gridTemplateColumns:"repeat(auto-fit,minmax(280px,1fr))" }}>
+      <div className="card pad small stack">
+        <h3>💳 How this site earns (client)</h3>
+        <ul style={{ margin:"6px 0 0 18px" }}>
+          <li><b>Hotel/ecommerce:</b> Room bookings & orders → <code>POST /api/bookings</code> / <code>/api/orders/checkout</code> → Stripe Checkout (demo URL if no key, real Stripe when you set <code>STRIPE_SECRET_KEY</code>). Check <code>source/api/EARNING.md</code> in the export.</li>
+          <li><b>Newsletter:</b> <code>POST /api/newsletter</code> builds owned audience (CSV in DB) — monetize via email.</li>
+          <li><b>Enquiries:</b> <code>POST /api/enquiries</code> → email notification (real when SMTP set, mock log otherwise).</li>
+        </ul>
+        <div className="tiny dim">Admin: manage with <code>Authorization: Bearer $ADMIN_TOKEN</code> → <code>GET /api/bookings</code> + <code>/api/orders</code>. Set <code>ADMIN_TOKEN</code> + <code>ALLOWED_ORIGIN</code> when you deploy the API separately (see <code>source/api/.env.example</code>).</div>
+      </div>
+      <div className="card pad small stack">
+        <h3>🚀 Deploy & handover checklist</h3>
+        <ol style={{ margin:"6px 0 0 18px" }}>
+          <li>Approve → Authorise deploy → Deploy (local/Netlify/Vercel/Render shown below)</li>
+          <li>Download ZIP or push to GitHub → deploy <code>source/api</code> (set <code>STRIPE_SECRET_KEY</code> + <code>ADMIN_TOKEN</code>)</li>
+          <li>Set <code>assets/config.js</code> <code>apiBase</code> + <code>stripePublishableKey</code> to your API origin</li>
+          <li>Test: open <code>booking.html</code> → submit → follow checkout_url (mock or Stripe)</li>
+          <li>Hand client live URL + admin token → they see bookings/orders.</li>
+        </ol>
+        <div className="small muted">Earning health: Preview API check <code>/api/health</code> shows <code>earning:true</code> when Stripe is live.</div>
+      </div>
+    </div>}
+
     <div className="card table-wrap"><table className="table"><thead><tr><th>Release</th><th>Provider</th><th>Status</th><th>Commit</th><th>When</th><th /></tr></thead>
       <tbody>{(data?.deployments || []).map((d: any) => <tr key={d.id}><td><code>{d.id.slice(0, 8)}</code> {d.current && <span className="badge b-green">current</span>}</td><td>{d.provider}</td><td><Status s={d.status} /></td><td><code>{d.commit_hash}</code></td><td className="small dim">{timeAgo(d.created_at)}</td>
         <td>{!d.current && d.status === "SUCCEEDED" && <button className="btn sm" onClick={() => rollback(d.id)}><LuRotateCcw /> Roll back</button>}</td></tr>)}</tbody></table>
-      {!data?.deployments?.length && <Empty title="Not deployed yet">Deployment only happens after you authorise it.</Empty>}</div>
-    <div className="card pad small"><h3 style={{ marginBottom: 6 }}>Deployment targets</h3>{(data?.adapters || []).map((a: any) => <div key={a.name} className="row between" style={{ padding: "3px 0" }}><span>{a.name}</span><span className={`badge ${a.configured ? "b-green" : "b-gray"}`}>{a.configured ? "configured" : a.note ? "interface only" : "not configured"}</span></div>)}</div>
+      {!data?.deployments?.length && <Empty title="Not deployed yet">Deployment only happens after you authorise it — then this site starts earning bookings. Local is always ready; Netlify/Vercel/Render work when you set their tokens.</Empty>}</div>
+    <div className="card pad small"><h3 style={{ marginBottom: 6 }}>Deployment targets</h3>{(data?.adapters || []).map((a: any) => <div key={a.name} className="row between" style={{ padding: "3px 0" }}><span>{a.name}</span><span className={`badge ${a.configured ? "b-green" : "b-gray"}`}>{a.configured ? "ready — can earn now" : a.note ? "interface only — set env" : "not configured"}</span></div>)}
+      <div className="tiny dim" style={{ marginTop:6 }}>Local = <code>/sites/{p.id}/</code> (always works). Netlify: <code>NETLIFY_AUTH_TOKEN + NETLIFY_SITE_ID</code>. Vercel: <code>VERCEL_TOKEN + VERCEL_PROJECT_ID</code>. Render: <code>RENDER_DEPLOY_HOOK_URL</code>. Cloudflare/GCP/AWS stubs ready — same interface.</div>
+    </div>
   </div>;
 }
 

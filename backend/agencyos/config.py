@@ -37,6 +37,24 @@ class Settings:
     access_token_ttl_minutes: int
     frontend_dist: Path
     allow_signup: bool
+    # ---- Monetization & earning ----
+    stripe_secret_key: str | None
+    stripe_publishable_key: str | None
+    stripe_webhook_secret: str | None
+    stripe_price_pro: str | None
+    stripe_price_business: str | None
+    base_url: str
+    # ---- Email ----
+    smtp_host: str | None
+    smtp_port: int
+    smtp_user: str | None
+    smtp_password: str | None
+    smtp_from: str | None
+    smtp_use_tls: bool
+    # ---- GitHub ----
+    github_token: str | None
+    github_client_id: str | None
+    github_client_secret: str | None
     extra: dict = field(default_factory=dict)
 
     @property
@@ -98,6 +116,21 @@ def load_settings(**overrides) -> Settings:
         access_token_ttl_minutes=int(os.getenv("AGENCYOS_TOKEN_TTL_MINUTES", "1440")),
         frontend_dist=Path(os.getenv("AGENCYOS_FRONTEND_DIST") or root / "frontend" / "dist"),
         allow_signup=_bool("AGENCYOS_ALLOW_SIGNUP", True),
+        stripe_secret_key=os.getenv("STRIPE_SECRET_KEY") or None,
+        stripe_publishable_key=os.getenv("STRIPE_PUBLISHABLE_KEY") or None,
+        stripe_webhook_secret=os.getenv("STRIPE_WEBHOOK_SECRET") or None,
+        stripe_price_pro=os.getenv("STRIPE_PRICE_PRO") or None,
+        stripe_price_business=os.getenv("STRIPE_PRICE_BUSINESS") or None,
+        base_url=(os.getenv("AGENCYOS_BASE_URL") or os.getenv("BASE_URL") or "http://localhost:8000").rstrip("/"),
+        smtp_host=os.getenv("SMTP_HOST") or os.getenv("EMAIL_SMTP_HOST") or None,
+        smtp_port=int(os.getenv("SMTP_PORT") or os.getenv("EMAIL_SMTP_PORT") or 587),
+        smtp_user=os.getenv("SMTP_USER") or os.getenv("EMAIL_SMTP_USER") or None,
+        smtp_password=os.getenv("SMTP_PASSWORD") or os.getenv("EMAIL_SMTP_PASSWORD") or None,
+        smtp_from=os.getenv("SMTP_FROM") or os.getenv("EMAIL_FROM") or None,
+        smtp_use_tls=_bool("SMTP_USE_TLS", True),
+        github_token=os.getenv("GITHUB_TOKEN") or None,
+        github_client_id=os.getenv("GITHUB_CLIENT_ID") or None,
+        github_client_secret=os.getenv("GITHUB_CLIENT_SECRET") or None,
     )
     for k, v in overrides.items():
         setattr(s, k, v)

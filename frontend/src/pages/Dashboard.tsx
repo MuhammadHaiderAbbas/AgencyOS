@@ -51,15 +51,20 @@ export function Dashboard() {
         <div>
           <div className="eyebrow"><LuSparkles /> AI SOFTWARE AGENCY · {greet}, {me.user.name.split(" ")[0]}</div>
           <h1>Describe your idea.<br />Our AI team <em>builds it.</em></h1>
-          <p className="lead">From websites to mobile apps, AI-powered teams turn your ideas into real products. No technical skills needed.</p>
+          <p className="lead">From websites to mobile apps, AI-powered teams turn your ideas into real products that <b>earn</b> — Stripe checkout, newsletter, SEO & deploy included. No tech skills needed.</p>
           <form className="idea-box" onSubmit={(e) => { e.preventDefault(); if (idea.trim()) create(idea.trim()); }}>
-            <LuSparkles color="#a5b4fc" /><input value={idea} onChange={(e) => setIdea(e.target.value)} placeholder="I want a modern website for my hotel…" aria-label="What do you want to build?" />
+            <LuSparkles color="#a5b4fc" /><input value={idea} onChange={(e) => setIdea(e.target.value)} placeholder="I want a modern website for my hotel that takes bookings…" aria-label="What do you want to build?" />
             <button className="go" disabled={busy || !idea.trim()} aria-label="Start project">{busy ? <LuLoader className="spinner" /> : <LuArrowRight />}</button>
           </form>
           <div className="chips">{CHIPS.map(([l, v]) => <button key={l} className="chip" type="button" onClick={() => v ? setIdea(v) : (document.querySelector<HTMLInputElement>(".idea-box input")!.focus())}>{l}</button>)}</div>
+          <div className="small muted" style={{ marginTop:10 }}>Try: <i>“A luxury hotel site with Stripe deposits”</i> · <i>“An ecommerce store with real checkout”</i></div>
         </div>
         <Pipeline project={focus} />
       </section>
+
+      <div className="card pad small" style={{ display:"flex", gap:10, alignItems:"center", flexWrap:"wrap", background:"linear-gradient(135deg, rgba(109,94,252,.12), rgba(34,211,238,.08))", borderColor:"#6d5efc33", margin:"16px 0 8px" }}>
+        <span className="badge b-purple">Earning</span><span className="small"><b>Build → Deploy → Earn:</b> each hotel/ecommerce site ships with Stripe Checkout (demo works, Stripe live when you set keys) + newsletter + SEO.</span><a className="btn sm primary" href="#/billing">Billing & referrals →</a>
+      </div>
 
       <div className="stats">
         {[["Active projects", s.active], ["Completed", s.completed], ["AI agents working", s.agents_working], ["Tasks today", s.tasks_today],

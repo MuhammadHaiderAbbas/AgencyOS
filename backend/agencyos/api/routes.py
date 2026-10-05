@@ -34,6 +34,7 @@ class SignupIn(BaseModel):
     email: str = Field(pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$", max_length=200)
     name: str = Field(min_length=1, max_length=100)
     password: str = Field(min_length=8, max_length=200)
+    referral_code: str | None = Field(default=None, max_length=16)
 
 
 class LoginIn(BaseModel):
@@ -57,6 +58,8 @@ async def signup(request: Request):
     email = data.email.strip().lower()
     if db().q1("SELECT id FROM users WHERE email = ?", (email,)):
         raise HTTPError(409, "An account with that email already exists")
+    # referral via signup body or query ?ref=
+    ref_code = (data.referral_code or request.query_params.get("ref") or "").strip()[:8]
     first = db().q1("SELECT COUNT(*) n FROM users")["n"] == 0
     uid, oid = new_id(), new_id()
     with db().transaction():
@@ -64,6 +67,15 @@ async def signup(request: Request):
                               "is_admin": int(first), "created_at": now()})
         db().insert("organizations", {"id": oid, "name": f"{data.name.strip()}'s workspace", "kind": "personal", "plan": "free", "created_at": now()})
         db().insert("memberships", {"org_id": oid, "user_id": uid, "role": "owner", "created_at": now()})
+        # referral earning link – credit when new org upgrades, not now
+        if ref_code:
+            try:
+                # find referrer org where id starts with code (first 8 of uuid)
+                ref_org = db().q1("SELECT id FROM organizations WHERE substr(id,1,8)=? LIMIT 1", (ref_code,))
+                if ref_org and ref_org["id"] != oid:
+                    db().insert("referrals", {"id": new_id(), "referrer_org_id": ref_org["id"], "referred_org_id": oid, "status": "pending", "reward_cents": 0, "created_at": now()})
+            except Exception:
+                pass
     db().insert("audit_logs", {"org_id": oid, "user_id": uid, "action": "signup", "created_at": now()})
     return _session(uid, oid)
 
@@ -165,6 +177,11 @@ async def list_projects(request, user):
 @auth()
 async def create_project(request, user):
     require_writer(user)
+    from ..services import billing as billing_svc
+    # earning: enforce plan limits – instant upgrade possible via billing
+    lim = billing_svc.check_limits(user["org_id"])
+    if not lim.get("can_create_project"):
+        raise HTTPError(402, f"Project limit reached for {lim['plan']} plan ({lim['limits'].get('projects')} projects). Upgrade to create more — visit Billing.")
     data = await body(request, ProjectIn)
     if not data.idea.strip() and not data.template:
         raise HTTPError(422, "Describe what you want to build")
@@ -698,6 +715,9 @@ def _org_secret_names(org_id):
 @auth()
 async def get_settings(request, user):
     from ..llm.router import org_secret
+    from ..services import billing as billing_svc
+    from ..services import email as email_svc
+    from ..services import github_integration as gh_svc
     names = _org_secret_names(user["org_id"])
     s = settings()
     return ok({
@@ -711,10 +731,13 @@ async def get_settings(request, user):
                    "openai": {"fast": s.openai_model_fast, "strong": s.openai_model_strong}},
         "integrations": {"web_search": websearch.configured(), "docker_sandbox": sandbox.docker_available(),
                          "external_agents_enabled": s.enable_external_agents, "deployment": deploy_svc.available(),
-                         "github": False, "email": False, "stripe": False},
+                         "github": gh_svc.status(), "email": {"configured": email_svc.configured(), "from": s.smtp_from or None},
+                         "stripe": {"configured": billing_svc.stripe_configured(), "publishable_key": billing_svc.publishable_key(),
+                                    "price_pro": bool(s.stripe_price_pro), "price_business": bool(s.stripe_price_business)}},
         "limits": {"max_task_retries": s.max_task_retries, "max_revisions": s.max_revisions,
                    "max_project_executions": s.max_project_executions, "max_project_budget_usd": s.max_project_budget_usd},
         "role": user["org_role"],
+        "base_url": s.base_url,
     })
 
 
@@ -739,15 +762,17 @@ async def put_providers(request, user):
 
 
 PLANS = [
-    {"id": "free", "name": "Free", "price": "£0", "limits": {"projects": 3, "agent_executions": 500, "storage_mb": 200, "deployments": 3}},
-    {"id": "pro", "name": "Pro", "price": "£29/mo", "limits": {"projects": 20, "agent_executions": 10000, "storage_mb": 5000, "deployments": 50}},
-    {"id": "business", "name": "Business", "price": "£99/mo", "limits": {"projects": 100, "agent_executions": 50000, "storage_mb": 50000, "deployments": 500}},
-    {"id": "enterprise", "name": "Enterprise", "price": "Contact us", "limits": {}},
+    {"id": "free", "name": "Free", "price": "£0", "price_cents": 0, "limits": {"projects": 3, "agent_executions": 500, "storage_mb": 200, "deployments": 3}, "features": ["3 projects","500 runs","Community"]},
+    {"id": "pro", "name": "Pro", "price": "£29/mo", "price_cents": 2900, "limits": {"projects": 20, "agent_executions": 10000, "storage_mb": 5000, "deployments": 50}, "features": ["20 projects","10k runs","5 GB","Netlify + Vercel","Stripe client checkout"]},
+    {"id": "business", "name": "Business", "price": "£99/mo", "price_cents": 9900, "limits": {"projects": 100, "agent_executions": 50000, "storage_mb": 50000, "deployments": 500}, "features": ["100 projects","50k runs","50 GB","All deploys","SMTP + GitHub","Priority"]},
+    {"id": "enterprise", "name": "Enterprise", "price": "Contact us", "price_cents": 0, "limits": {}, "features": ["Unlimited","SSO","SLA"]},
 ]
 
 
 @auth()
 async def billing(request, user):
+    from ..services import billing as billing_svc, deploy as dsvc
+    from ..services import email as email_svc
     org = db().q1("SELECT * FROM organizations WHERE id = ?", (user["org_id"],))
     since = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
     usage = {
@@ -759,8 +784,89 @@ async def billing(request, user):
         "storage_mb": round(sum(f.stat().st_size for p in db().q("SELECT id FROM projects WHERE org_id = ?", (user["org_id"],))
                                 for f in workspace.path_for(p["id"]).rglob("*") if f.is_file()) / 1e6, 2),
     }
-    return ok({"plan": org["plan"], "plans": PLANS, "usage": usage, "period": "last 30 days",
-               "payment_provider": {"configured": False, "note": "No payment provider is configured. Plan changes are disabled until Stripe keys are set."}})
+    cfg = billing_svc.stripe_configured()
+    # earnings summary
+    earn = db().q1("SELECT COALESCE(SUM(amount_cents),0) total, COUNT(*) n FROM earnings WHERE org_id = ?", (user["org_id"],))
+    recent_earn = db().q("SELECT * FROM earnings WHERE org_id = ? ORDER BY created_at DESC LIMIT 10", (user["org_id"],))
+    bills = db().q("SELECT * FROM billing_events WHERE org_id = ? ORDER BY created_at DESC LIMIT 10", (user["org_id"],))
+    return ok({"plan": org["plan"], "plans": billing_svc.get_plans(), "usage": usage, "period": "last 30 days",
+               "earnings": {"total_cents": earn["total"], "count": earn["n"], "recent": recent_earn},
+               "billing_history": bills,
+               "limits": billing_svc.check_limits(user["org_id"]),
+               "stripe_publishable_key": billing_svc.publishable_key(),
+               "payment_provider": {"configured": cfg, "provider": "stripe" if cfg else "mock",
+                                     "note": "Stripe live: card will be charged. Mock mode: checkout instantly upgrades (demo earning, no card needed)." if cfg else "Demo earning mode: Upgrades are instant with no card. Add STRIPE_SECRET_KEY + prices for live Stripe."}})
+
+
+class CheckoutIn(BaseModel):
+    plan: str = Field(pattern="^(pro|business)$")
+    success_url: str | None = None
+    cancel_url: str | None = None
+
+@auth()
+async def billing_checkout(request, user):
+    import datetime
+    data = await body(request, CheckoutIn)
+    from ..services import billing as billing_svc
+    # enforce upgrade path
+    org = db().q1("SELECT plan FROM organizations WHERE id = ?", (user["org_id"],))
+    if org["plan"] == data.plan:
+        raise HTTPError(409, "You are already on that plan")
+    try:
+        res = billing_svc.create_checkout_session(user["org_id"], data.plan, customer_email=user["email"], origin=str(request.base_url).rstrip("/"))
+    except Exception as e:
+        raise HTTPError(502, str(e)[:400])
+    return ok(res)
+
+@auth()
+async def billing_portal(request, user):
+    from ..services import billing as billing_svc
+    try:
+        res = billing_svc.create_customer_portal(user["org_id"], return_url=str(request.base_url).rstrip("/") + "/#/billing")
+    except Exception as e:
+        raise HTTPError(502, str(e)[:400])
+    return ok(res)
+
+async def billing_webhook(request: Request):
+    from ..services import billing as billing_svc
+    body = await request.body()
+    sig = request.headers.get("stripe-signature") or request.headers.get("Stripe-Signature")
+    try:
+        res = billing_svc.handle_webhook_raw(body, sig)
+    except ValueError as e:
+        raise HTTPError(400, str(e))
+    except Exception as e:
+        raise HTTPError(500, str(e)[:200])
+    return ok(res)
+
+@auth()
+async def billing_downgrade(request, user):
+    data = await body(request, CheckoutIn) if request.headers.get("content-type") else {"plan": "free"}
+    # Allow free downgrade directly (no stripe)
+    from ..services import billing as billing_svc
+    if isinstance(data, dict):
+        plan = data.get("plan") if isinstance(data, dict) else "free"
+    else:
+        plan = data.plan
+    if plan not in ("free","pro","business"):
+        raise HTTPError(422, "invalid plan")
+    # enterprise requires contact
+    billing_svc.apply_plan(user["org_id"], plan)
+    return ok({"plan": plan})
+
+
+@auth()
+async def earnings(request, user):
+    rows = db().q("SELECT * FROM earnings WHERE org_id = ? ORDER BY created_at DESC LIMIT 100", (user["org_id"],))
+    total = db().q1("SELECT COALESCE(SUM(amount_cents),0) total FROM earnings WHERE org_id = ?", (user["org_id"],))
+    by_project = db().q("SELECT project_id, SUM(amount_cents) total, COUNT(*) n FROM earnings WHERE org_id = ? GROUP BY project_id", (user["org_id"],))
+    return ok({"earnings": rows, "total_cents": total["total"] if total else 0, "by_project": by_project})
+
+@auth()
+async def referral_info(request, user):
+    code = user["org_id"][:8]
+    referred = db().q("SELECT * FROM referrals WHERE referrer_org_id = ?", (user["org_id"],))
+    return ok({"code": code, "referrals": referred, "link": f"{settings().base_url}/?ref={code}", "reward": "£5 per Pro, £15 per Business (credited as earnings)"})
 
 
 @auth(admin=True)
@@ -815,6 +921,7 @@ routes = [
     _r("/api/agents/{agent_id}/disable", agent_toggle, ["POST"]), _r("/api/agents/{agent_id}/health", agent_health, ["POST"]),
     _r("/api/agents/{agent_id}/test", agent_test, ["POST"]),
     _r("/api/settings", get_settings), _r("/api/settings/providers", put_providers, ["PUT"]),
-    _r("/api/billing", billing), _r("/api/admin/observability", observability),
+    _r("/api/billing", billing), _r("/api/billing/checkout", billing_checkout, ["POST"]), _r("/api/billing/portal", billing_portal, ["POST"]), _r("/api/billing/webhook", billing_webhook, ["POST"]), _r("/api/billing/downgrade", billing_downgrade, ["POST"]), _r("/api/earnings", earnings), _r("/api/referrals", referral_info),
+    _r("/api/admin/observability", observability),
     _r("/sites/{pid}/{path:path}", deployed_site),
 ]
